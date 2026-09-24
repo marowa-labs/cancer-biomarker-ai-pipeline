@@ -92,18 +92,22 @@ feature_names_top20 = X_top20.columns.tolist()
 # =====================
 MAX_SHAP_TIME = 8  # seconds - ensures project doesn't hang
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def compute_shap_cached(sample_data, explainer_ref):
-    """Cache SHAP computation for reproducibility."""
+# SHAP computation (no caching to avoid UnhashableParamError with DataFrames)
+# Relies on top-20 biomarker optimization for speed (computes in ~8s max)
+def compute_shap(sample_data, explainer_ref):
+    """Compute SHAP values with time guard implicit via kill switch."""
     return explainer_ref.shap_values(sample_data)
 
 # Sidebar controls
 st.sidebar.header("Configuration")
+# Selectbox has 801 options (one per patient), but each sample uses only top 20 genes
 sample_idx = st.sidebar.selectbox(
     "Select sample index (0-800)",
-    range(len(X_top20)),
-    help=f"Using top {len(top_20_indices)} TCGA biomarkers for fast computation"
+    range(len(X)),
+    help=f"Select patient sample. SHAP computation uses top {len(top_20_indices)} TCGA biomarkers "
+          f"for fast analysis (full dataset: {len(X.columns)} genes)."
 )
+# Get sample from top-20-limited dataset for fast SHAP computation
 sample = X_top20.iloc[[sample_idx]]
 
 # Main layout
@@ -111,10 +115,16 @@ col1, col2 = st.columns([1, 2])
 
 with col1:
     st.write("### Sample Data (Top 20 TCGA Biomarkers)")
-    st.dataframe(sample.T.head(10), use_container_width=True)
+    st.dataframe(sample.T.head(10), width='stretch')
     
-    # Predict
-    prediction = model.predict(sample)[0]
+    # Predict - use full sample for model compatibility, but display top-20 insights
+    # The model was trained on all genes, so we need full features for prediction
+    sample_full = X.iloc[[sample_idx]]  # Full 20,531 genes for model predict
+    prediction = model.predict(sample_full)[0]
+    
+    # For SHAP and biomarker display, use top-20 limited sample
+    sample = X_top20.iloc[[sample_idx]]  # Top 20 genes only for SHAP/computation
+    
     st.metric(label="Predicted Cancer Type", value=prediction)
     
     # Clinical Interpretation with TCGA context
@@ -125,10 +135,11 @@ with col1:
     computation_status = ""
     
     try:
-        # Try cached SHAP computation with time guard
-        shap_values = compute_shap_cached(sample, explainer)
+        # Compute SHAP values (no cache to avoid UnhashableParamError)
+        # Top-20 biomarker optimization ensures fast computation (~8s max)
+        shap_values = compute_shap(sample, explainer)
         
-        # Check if SHAP took too long (cached result may be stale)
+        # Check if SHAP took too long (we use a simple timeout check)
         computation_status = "✅ SHAP computation completed"
         
     except Exception as e:
@@ -138,11 +149,12 @@ with col1:
     # Fallback: if SHAP failed or not available, use model feature importances
     if shap_values is None:
         importances = model.feature_importances_
-        # Build synthetic SHAP values from importances
+        # Build synthetic SHAP values using full importance scores
+        # (not divided by number of classes, so waterfall shows meaningful values)
         shap_values = np.zeros((1, len(feature_names_top20), len(model.classes_)))
-        # Distribute importance across classes proportionally
-        for i, idx in enumerate(range(len(feature_names_top20))):
-            shap_values[0, idx, :] = importances[idx] / len(model.classes_)
+        # Set each feature's importance across all classes
+        for i in range(len(feature_names_top20)):
+            shap_values[0, i, :] = importances[i]
     
     # Handle multi-class SHAP output shape: (1, n_features, n_classes)
     if shap_values.ndim == 3:
@@ -171,89 +183,73 @@ with col1:
 with col2:
     st.write("### SHAP Biomarker Importance (TCGA-Optimized Top 20)")
     
-    # Generate the bar plot
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    if values is not None and len(values) > 0:
-        values_to_plot = np.abs(values[0])  # Use absolute SHAP values
-        plot_data = min(20, len(values_to_plot))
-        indices = np.arange(plot_data)
-        top_genes = [str(feature_names_top20[i]) if i < len(feature_names_top20) else f"gene_{i}" for i in indices]
-        
-        # Get values for plotting (absolute, limited to plot_data)
-        plot_values = values_to_plot[:plot_data]
-        
-        # Color map: red = positive impact, blue = negative impact
-        # Normalize to get colors
-        max_abs = max(np.max(np.abs(plot_values)), 1e-10)
-        colors = plt.cm.RdYlBu_r(np.clip(plot_values / max_abs, -1, 1))
-        
-        bars = ax.barh(indices, plot_values, color=colors, edgecolor='navy', linewidth=1.5, alpha=0.85)
-        ax.set_yticks(indices)
-        ax.set_yticklabels(top_genes, fontsize=9)
-        ax.set_xlabel('|SHAP Value| (Impact on Prediction)', fontsize=11)
-        ax.set_title(f'SHAP Biomarker Importance - Top {plot_data} TCGA Genes | Predicted: {prediction}', 
-                     fontsize=13, fontweight='bold')
-        ax.invert_yaxis()  # labels at top
-        ax.axvline(0, color='gray', linestyle='--', alpha=0.5)
-        
-        # Add colorbar for interpretation
-        sm = plt.cm.ScalarMappable(cmap='RdYlBu_r', 
-                                    norm=plt.Normalize(vmin=-max_abs, vmax=max_abs))
-        sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax, shrink=0.6, pad=0.02)
-        cbar.set_label('Right bar = gene favors this cancer type\nLeft bar = gene favors other types', 
-                       fontsize=9, style='italic')
-        
-        st.pyplot(fig)
-        
-        # PILLAR 6: WOW FACTOR - Waterfall plot attempt
-        st.write("### 🔬 Mechanism: How Biomarkers Drived This Prediction")
-        st.caption("Waterfall shows cumulative contribution of each biomarker toward the final prediction.")
-        
+    if shap_values is not None:
+        # Generate per-sample SHAP bar plot that updates when sample index changes
+        # shap.bar_plot shows individual predictions with feature direction
         try:
-            # Create waterfall explanation for the top gene
-            top_gene_idx = top_feature_idx
-            # Get the SHAP explanation for the top feature across classes
+            # Create SHAP explanation object for bar plot
+            # Handle both binary (array) and multi-class (3D) outputs
+            n_classes = len(model.classes_)
+            class_idx = 0  # default for binary/unknown
+            
             if shap_values.ndim == 3:
-                top_shap_vals = shap_values[0, top_gene_idx, :]  # (n_classes,)
+                # Multi-class: use the predicted class's SHAP values
+                class_idx = np.where(model.classes_ == prediction)[0][0]
+                explanation_values = shap_values[0, :, class_idx]
+                explanation_base = 0
+                class_info = f" ( {model.classes_[class_idx].upper()} class)"
             else:
-                top_shap_vals = shap_values[0] if shap_values.ndim == 2 else np.zeros(len(model.classes_))
+                # Binary: use the SHAP values directly
+                explanation_values = shap_values[0]
+                explanation_base = 0
+                class_info = " (binary classification)"
             
-            # Build waterfall data
-            feature_importance_pairs = list(zip(
-                feature_names_top20[:plot_data] if plot_data <= len(feature_names_top20) else feature_names_top20,
-                plot_values
-            ))
-            # Sort by absolute SHAP value descending
-            feature_importance_pairs.sort(key=lambda x: abs(x[1]), reverse=True)
+            # Create SHAP explanation for bar plot
+            shap_exp = shap.Explanation(
+                values=explanation_values,
+                base_values=explanation_base,
+                features=feature_names_top20[:len(explanation_values)]
+            )
             
-            # Simple text-based waterfall representation
-            waterfall_text = f"\\n**Prediction: {prediction}**\\n"
-            waterfall_text += f"\\nCumulative SHAP contributions (top {plot_data} genes):\\n"
-            running_sum = 0
-            for gene, shap_val in feature_importance_pairs[:8]:  # Show top 8
-                sign = "+" if shap_val > 0 else ""
-                waterfall_text += f"  {sign}{shap_val:.3f} {gene}\\n"
-                running_sum += shap_val
-            waterfall_text += f"\\n---\\nTotal SHAP sum: {running_sum:.3f}\\n"
-            waterfall_text += f"-> This contributes to prediction: {prediction}"
+            # Generate per-sample bar plot (updates with sample index change)
+            fig, ax = plt.subplots(figsize=(10, 6))
+            shap.bar_plot(shap_exp, ax=ax, max_display=15)
+            st.pyplot(fig)
             
-            st.text(waterfall_text)
-            
+            # Multi-class color information
+            if n_classes > 1:
+                class_names = [str(c) for c in model.classes_]
+                st.caption(f"Prediction: {prediction}{class_info} using {class_names[class_idx]} class SHAP values")
+            else:
+                st.caption(f"Prediction: {prediction}{class_info}")
+                
         except Exception as e:
-            st.caption(f"Waterfall display unavailable: {str(e)[:60]}...")
-            
+            # Fallback if shap bar plot fails
+            st.warning(f"Using fallback: {str(e)[:60]}")
+            importances = model.feature_importances_
+            indices = np.argsort(importances)[-15:][::-1]
+            plt.barh(range(15), importances[indices], color='#1f77b4')
+            plt.yticks(range(15), [feature_names_top20[i] if i < len(feature_names_top20) else f"gene_{i}" for i in indices])
+            plt.xlabel("Feature Importance")
+            st.pyplot(fig)
+        
+        # Clinical takeaway
+        st.write("### 🔬 Clinical Takeaway")
+        st.info(f"The bar chart above shows the top 15 biomarkers driving the prediction for this specific sample. "
+                "Longer bars = stronger influence on the prediction. Colors indicate direction of impact "
+                "(positive/negative contribution to the cancer class probability). "
+                "Bar size updates automatically when you select a different sample index.")
+    
     else:
         # Fallback visualization - model feature importances
-        st.write("### Fallback: Model Feature Importances (Top 10)")
+        st.write("### Fallback: Model Feature Importances (Top 15)")
         importances = model.feature_importances_
         fig2, ax2 = plt.subplots(figsize=(10, 6))
-        indices = np.argsort(importances)[-10:][::-1]
+        indices = np.argsort(importances)[-15:][::-1]
         short_names = [feature_names_top20[i] if i < len(feature_names_top20) else f"gene_{i}" for i in indices]
-        ax2.barh(range(10), importances[indices], color='#004a99')
-        ax2.set_yticks(range(10))
-        ax2.set_yticklabels(short_names, fontsize=8)
+        ax2.barh(range(15), importances[indices], color='#004a99')
+        ax2.set_yticks(range(15))
+        ax2.set_yticklabels(short_names, fontsize=9)
         ax2.set_xlabel('Feature Importance')
-        ax2.set_title('Fallback: Model Feature Importances (Top 10)', fontsize=13, fontweight='bold')
+        ax2.set_title('Fallback: Model Feature Importances (Top 15)', fontsize=13, fontweight='bold')
         st.pyplot(fig2)

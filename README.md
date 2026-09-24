@@ -32,6 +32,21 @@ graph LR
     F --> G[Streamlit Dashboard]
 ```
 
+### Visual Artifacts & Dashboard Previews
+Here are some visual insights and captures from the pipeline and data portal:
+
+![GDC Data Portal](data/images/GDC-Data-Portal.png)
+*Figure 1: GDC Data Portal gene expression data source.*
+
+![Index Visualization](data/images/indexs.png)
+*Figure 2: Index / Data distribution overview.*
+
+![Dashboard Preview 1](data/images/Screenshot%202026-08-08%20203353.png)
+*Figure 3: Streamlit dashboard workflow preview.*
+
+![Dashboard Preview 2](data/images/Screenshot%202026-08-08%20203425.png)
+*Figure 4: Detailed biomarker and prediction view.*
+
 ## Key Features
 - **High Accuracy**: Achieved 99.6% accuracy using Stratified K-Fold cross-validation.
 - **Explainability**: Uses SHAP values to rank genes by their contribution to cancer classification.
