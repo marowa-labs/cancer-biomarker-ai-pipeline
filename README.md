@@ -55,6 +55,6 @@ Here are some visual insights and captures from the pipeline and data portal:
 ## Getting Started
 1. Create a virtual environment: `python3 -m venv venv`
 2. Activate it: `source venv/bin/activate`
-3. Install dependencies: `pip install streamlit pandas joblib shap scikit-learn matplotlib`
+3. Install dependencies: `pip install -r requirements.txt`
 4. Run the app: `streamlit run app.py`
 # cancer-biomarker-ai-pipeline
