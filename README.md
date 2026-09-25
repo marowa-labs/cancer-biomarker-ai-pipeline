@@ -35,17 +35,20 @@ graph LR
 ### Visual Artifacts & Dashboard Previews
 Here are some visual insights and captures from the pipeline and data portal:
 
+![The Cancer Genome Atlas Program (TCGA)](data/images/TCGA-program.png)
+*Figure 1: The Cancer Genome Atlas Program (TCGA).*
+
 ![GDC Data Portal](data/images/GDC-Data-Portal.png)
-*Figure 1: GDC Data Portal gene expression data source.*
+*Figure 2: GDC Data Portal gene expression data source.*
 
 ![Index Visualization](data/images/indexs.png)
-*Figure 2: Index / Data distribution overview.*
+*Figure 3: Index / Data distribution overview.*
 
 ![Dashboard Preview 1](data/images/Screenshot%202026-08-08%20203353.png)
-*Figure 3: Streamlit dashboard workflow preview.*
+*Figure 4: Streamlit dashboard workflow preview.*
 
 ![Dashboard Preview 2](data/images/Screenshot%202026-08-08%20203425.png)
-*Figure 4: Detailed biomarker and prediction view.*
+*Figure 5: Detailed biomarker and prediction view.*
 
 ## Key Features
 - **High Accuracy**: Achieved 99.6% accuracy using Stratified K-Fold cross-validation.
@@ -53,8 +56,8 @@ Here are some visual insights and captures from the pipeline and data portal:
 - **Interactive Dashboard**: A professional Streamlit app for real-time prediction and biomarker visualization.
 
 ## Getting Started
-1. Create a virtual environment: `python3 -m venv venv`
-2. Activate it: `source venv/bin/activate`
+1. Create a virtual environment: On Linux/MacOS - `python3 -m venv venv` On Windows - `py -m venv venv`
+2. Activate it: On Linux/MacOS - `source venv/bin/activate` On Windows - `.\venv\Scripts\Activate.ps1`
 3. Install dependencies: `pip install -r requirements.txt`
 4. Run the app: `streamlit run app.py`
 # cancer-biomarker-ai-pipeline

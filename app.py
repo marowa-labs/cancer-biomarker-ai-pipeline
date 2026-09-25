@@ -95,11 +95,16 @@ MAX_SHAP_TIME = 8  # seconds - ensures project doesn't hang
 # SHAP computation (no caching to avoid UnhashableParamError with DataFrames)
 # Relies on top-20 biomarker optimization for speed (computes in ~8s max)
 def compute_shap(sample_data, explainer_ref):
-    """Compute SHAP values with time guard implicit via kill switch."""
+    """Compute SHAP values using the full feature set expected by the explainer."""
     return explainer_ref.shap_values(sample_data)
 
 # Sidebar controls
 st.sidebar.header("Configuration")
+compute_exact_shap = st.sidebar.checkbox(
+    "Compute exact SHAP values",
+    value=False,
+    help="Exact SHAP uses all 20,531 genes and may take more than a minute.",
+)
 # Selectbox has 801 options (one per patient), but each sample uses only top 20 genes
 sample_idx = st.sidebar.selectbox(
     "Select sample index (0-800)",
@@ -134,27 +139,30 @@ with col1:
     shap_values = None
     computation_status = ""
     
-    try:
-        # Compute SHAP values (no cache to avoid UnhashableParamError)
-        # Top-20 biomarker optimization ensures fast computation (~8s max)
-        shap_values = compute_shap(sample, explainer)
-        
-        # Check if SHAP took too long (we use a simple timeout check)
-        computation_status = "✅ SHAP computation completed"
-        
-    except Exception as e:
-        computation_status = f"⚠ SHAP timeout/fallback engaged ({type(e).__name__})"
-        shap_values = None
+    if compute_exact_shap:
+        try:
+            # The saved explainer expects all 20,531 model features. Compute on
+            # the full sample, then retain only the selected top-20 genes.
+            raw_shap_values = compute_shap(sample_full, explainer)
+            if isinstance(raw_shap_values, list):
+                raw_shap_values = np.stack(raw_shap_values, axis=-1)
+            if raw_shap_values.ndim == 3:
+                shap_values = raw_shap_values[:, top_20_indices, :]
+            else:
+                shap_values = raw_shap_values[:, top_20_indices]
+            computation_status = "✅ Exact SHAP computation completed"
+        except Exception as e:
+            computation_status = f"⚠ SHAP fallback engaged ({type(e).__name__})"
+            shap_values = None
+    else:
+        computation_status = "Model feature importance used for fast analysis"
     
     # Fallback: if SHAP failed or not available, use model feature importances
     if shap_values is None:
-        importances = model.feature_importances_
-        # Build synthetic SHAP values using full importance scores
-        # (not divided by number of classes, so waterfall shows meaningful values)
-        shap_values = np.zeros((1, len(feature_names_top20), len(model.classes_)))
-        # Set each feature's importance across all classes
-        for i in range(len(feature_names_top20)):
-            shap_values[0, i, :] = importances[i]
+        top_importances = model.feature_importances_[top_20_indices]
+        shap_values = np.repeat(
+            top_importances[None, :, None], len(model.classes_), axis=2
+        )
     
     # Handle multi-class SHAP output shape: (1, n_features, n_classes)
     if shap_values.ndim == 3:
