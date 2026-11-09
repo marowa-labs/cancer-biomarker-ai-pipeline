@@ -54,16 +54,40 @@ The current deployment builder reports performance on a stratified held-out test
 
 ### What do the bars in the dashboard mean?
 
-The app separates two charts:
+When you select a held-out sample, the model uses that sample's 20 expression values to generate a prediction. Selecting a different sample does not retrain the model:
 
-- **Model-level feature ranking** shows the training-only Extra Trees importance scores used to select the 20 features. It is not a sample-specific explanation.
-- **SHAP explanation** is generated for a selected sample only when the viewer clicks “Explain this prediction with SHAP.” Signed values show how features move the model output for the selected class.
+- **Class probabilities** are recalculated for the selected sample, with one score for each of the five classes. The class with the highest score is the prediction. These are model outputs, not clinical certainty or patient risk.
+- **Selected gene features** shows that sample's expression values for the same 20 model inputs. The feature names stay the same between samples; their expression values can differ. These values are not importance scores.
+- **Model-level feature ranking** stays the same when the sample changes. It shows global Extra Trees importance scores, calculated using only the training split, for the top 15 features. These scores describe the feature-selection stage across training data; they do not explain an individual prediction.
+- **Sample-level SHAP explanation** is calculated for the selected sample only after clicking “Explain this prediction with SHAP.” It displays up to 15 features ranked by the magnitude of their SHAP values for the predicted class. Positive and negative values show the direction in which each feature moves that class's model output relative to the explanation's baseline.
 
-Neither chart proves causation or establishes clinical biomarker utility. Explain which chart you are showing.
+SHAP and feature-importance values describe model behavior; neither proves biological causation or clinical biomarker utility. After changing samples, click the SHAP button again to calculate an explanation for the new selection.
+
+**Presentation-ready explanation:**
+
+> “I select a held-out sample, and the trained model processes its 20 gene-expression features to produce a score for each of the five cancer classes. The highest score is the predicted class. The app also shows the known class for this held-out sample, so we can compare the prediction with its dataset label. The feature table shows the expression values used as input. The model-level ranking is global, based on the training data, so it does not change with the selected sample. SHAP is different: it explains this sample's prediction by showing which features moved the model output toward or away from the predicted class. These are explanations of the model, not proof of biological causes or clinical certainty.”
+
+“Held-out” means the sample was reserved from model training for evaluation within this dataset. It does not mean that it came from an independent hospital, study, or population.
+
+### How do I explain the model evaluation tables?
+
+The evaluation view separates model selection from final testing. Feature selection used the training split, Random Forest and Extra Trees were compared on the validation split, and the held-out test split was reserved for the final performance report. The chosen model is Extra Trees, based on validation macro F1; the held-out test results were not used to choose between candidates.
+
+- **Validation comparison:** Each row is a candidate algorithm, and the columns show validation accuracy and macro F1. Accuracy is the fraction of validation samples classified correctly. Macro F1 calculates F1 for each class and averages those class scores equally, so large classes do not dominate the summary. Extra Trees had the higher validation macro F1 (about 0.990 versus 0.984 for Random Forest), so it was selected.
+- **Held-out classification report:** Each cancer-class row reports precision, recall, F1-score, and support. Precision answers, “Of the samples predicted as this class, what fraction truly belonged to it?” Recall answers, “Of the true samples in this class, what fraction did the model find?” F1 balances precision and recall. Support is the number of held-out samples whose observed label is that class. The summary rows give aggregate results; the `accuracy` row is overall accuracy.
+- **Held-out confusion matrix:** Rows are the observed (true) classes and columns are the model's predicted classes. Counts on the diagonal are correct classifications. Off-diagonal counts show which true class was mistaken for which predicted class. The class order is shown in the table headers; these are counts, not percentages.
+
+For example, the held-out report has 161 samples and overall accuracy of about 98.1%. This describes performance on one split from this dataset only. It is not external validation, and it does not establish accuracy on new populations or clinical samples.
 
 ### How could the takeaways help researchers?
 
-The ranked genes can help researchers prioritize candidates for follow-up, such as checking the literature, testing an independent dataset, or designing laboratory experiments. They are hypotheses for further research, not treatment recommendations or validated diagnostic findings.
+If adapted and rigorously validated for research use, a tool like this could help researchers explore expression patterns, compare a sample with the five classes supported by the model, and flag predictions that differ from known labels for further investigation. Feature rankings and SHAP explanations could help prioritize patterns for literature review, independent-dataset analysis, or laboratory follow-up. These outputs are research leads, not proof that a gene causes cancer.
+
+The current app is only an exploratory prototype. It supports five classes, its gene IDs have not been mapped to verified gene symbols, and its reported performance comes from one held-out split of this dataset. Before relying on it in real-world research, it would need verified biological annotation, independent-cohort validation, and testing across datasets and laboratories. It should not be used to diagnose patients or guide treatment.
+
+**Presentation-ready answer:**
+
+> “In a real research setting, this could be a hypothesis-generation and exploration tool. It may help researchers inspect expression patterns, find samples for follow-up, and prioritize features for further study. However, our current prototype has only been evaluated on one split of one dataset, supports five cancer classes, and does not yet map its gene IDs to verified gene names. We would need independent validation and biological follow-up before drawing conclusions. It is not a diagnostic tool and should not guide patient treatment.”
 
 ### Was the app deployed?
 
