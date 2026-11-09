@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import shap
 
 # Set page configuration for a professional look
 st.set_page_config(page_title="TCGA Cancer Classification AI", layout="wide")
@@ -216,12 +217,12 @@ with col2:
             shap_exp = shap.Explanation(
                 values=explanation_values,
                 base_values=explanation_base,
-                features=feature_names_top20[:len(explanation_values)]
+                feature_names=feature_names_top20[:len(explanation_values)]
             )
             
             # Generate per-sample bar plot (updates with sample index change)
             fig, ax = plt.subplots(figsize=(10, 6))
-            shap.bar_plot(shap_exp, ax=ax, max_display=15)
+            shap.plots.bar(shap_exp, ax=ax, max_display=15, show=False)
             st.pyplot(fig)
             
             # Multi-class color information
@@ -234,11 +235,13 @@ with col2:
         except Exception as e:
             # Fallback if shap bar plot fails
             st.warning(f"Using fallback: {str(e)[:60]}")
-            importances = model.feature_importances_
+            importances = model.feature_importances_[top_20_indices]
             indices = np.argsort(importances)[-15:][::-1]
-            plt.barh(range(15), importances[indices], color='#1f77b4')
-            plt.yticks(range(15), [feature_names_top20[i] if i < len(feature_names_top20) else f"gene_{i}" for i in indices])
-            plt.xlabel("Feature Importance")
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.barh(range(len(indices)), importances[indices], color='#1f77b4')
+            ax.set_yticks(range(len(indices)))
+            ax.set_yticklabels([feature_names_top20[i] for i in indices])
+            ax.set_xlabel("Feature Importance")
             st.pyplot(fig)
         
         # Clinical takeaway
@@ -251,12 +254,12 @@ with col2:
     else:
         # Fallback visualization - model feature importances
         st.write("### Fallback: Model Feature Importances (Top 15)")
-        importances = model.feature_importances_
+        importances = model.feature_importances_[top_20_indices]
         fig2, ax2 = plt.subplots(figsize=(10, 6))
         indices = np.argsort(importances)[-15:][::-1]
-        short_names = [feature_names_top20[i] if i < len(feature_names_top20) else f"gene_{i}" for i in indices]
-        ax2.barh(range(15), importances[indices], color='#004a99')
-        ax2.set_yticks(range(15))
+        short_names = [feature_names_top20[i] for i in indices]
+        ax2.barh(range(len(indices)), importances[indices], color='#004a99')
+        ax2.set_yticks(range(len(indices)))
         ax2.set_yticklabels(short_names, fontsize=9)
         ax2.set_xlabel('Feature Importance')
         ax2.set_title('Fallback: Model Feature Importances (Top 15)', fontsize=13, fontweight='bold')
