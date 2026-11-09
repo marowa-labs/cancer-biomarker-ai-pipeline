@@ -3,3 +3,5 @@ __pycache__/
 *.pkl
 *.csv
 .ipynb_checkpoints/
+!deployment_demo.csv
+!deployment_features.csv

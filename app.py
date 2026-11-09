@@ -1,266 +1,372 @@
-import streamlit as st
-import pandas as pd
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import joblib
 import numpy as np
-import matplotlib.pyplot as plt
+import pandas as pd
 import shap
+import streamlit as st
 
-# Set page configuration for a professional look
-st.set_page_config(page_title="TCGA Cancer Classification AI", layout="wide")
 
-# Custom CSS for industrial look with TCGA colors
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f5f7f9;
-    }
-    .stButton>button {
-        background-color: #004a99;
-        color: white;
-        border-radius: 5px;
-    }
-    .stMetric>label {
-        color: #004a99;
-    }
-    /* TCGA badge styling */
-    .tcga-badge {
-        background: #1f77b4;
-        color: white;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 0.7em;
-        margin-left: 8px;
-    }
-    .stSelectbox > div > div > div {
-        background-color: white;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+ROOT = Path(__file__).resolve().parent
+MODEL_PATH = ROOT / "deployment_model.joblib"
+DEMO_PATH = ROOT / "deployment_demo.csv"
+FEATURES_PATH = ROOT / "deployment_features.csv"
+METRICS_PATH = ROOT / "deployment_metrics.json"
 
-# TCGA Context Header
-st.title("🧬 TCGA Cancer Type Classification AI")
-st.subheader("Official The Cancer Genome Atlas (TCGA) - Pan-Cancer Analysis")
-st.markdown('<p class="tcga-badge">TCGA-Validated</p>', unsafe_allow_html=True)
+CANCER_NAMES = {
+    "BRCA": "Breast invasive carcinoma",
+    "COAD": "Colon adenocarcinoma",
+    "KIRC": "Kidney renal clear cell carcinoma",
+    "LUAD": "Lung adenocarcinoma",
+    "PRAD": "Prostate adenocarcinoma",
+}
 
-st.caption("Leveraging TCGA Pan-Cancer RNA-Seq data: 801 samples | 20 cancer types | Random Forest Classifier with SHAP Explainability")
+st.set_page_config(
+    page_title="Cancer expression research demo",
+    page_icon=":material/biotech:",
+    layout="wide",
+)
 
-# Load resources with timing
+
 @st.cache_resource
-def load_resources():
-    import time as _time
-    start = _time.time()
-    model = pd.read_pickle('cancer_model.pkl') if False else __import__('joblib').load('cancer_model.pkl')
-    X = pd.read_csv('X_cleaned.csv')
-    explainer = pd.read_pickle('explainer.pkl') if False else __import__('joblib').load('explainer.pkl')
-    load_time = _time.time() - start
-    return model, X, explainer, load_time
+def load_model_bundle() -> dict:
+    if not MODEL_PATH.is_file():
+        raise FileNotFoundError(f"Deployment model not found: {MODEL_PATH.name}")
+    return joblib.load(MODEL_PATH)
 
-model, X, explainer, load_time = load_resources()
-
-# =====================
-# PILLAR 1: FEASIBILITY - Top 20 Biomarkers
-# =====================
-# The full TCGA dataset has 20,531 genes. Using the top 20 identified biomarkers
-# makes SHAP computation 1000x faster while maintaining TCGA validity.
-# This satisfies the "Rule of 3" feasibility gate.
 
 @st.cache_data
-def get_top_20_gene_indices():
-    """Map top_20_biomarkers.csv feature names to X_cleaned column indices."""
-    top_df = pd.read_csv('top_20_biomarkers.csv')
-    gene_indices = []
-    for feat in top_df['feature']:
-        # feature format: "gene_7896"
-        if feat.startswith('gene_'):
-            gene_num = feat.replace('gene_', '')
-            # Check if this gene exists in our dataset
-            matching_cols = [c for c in X.columns if c == f'gene_{gene_num}']
-            if matching_cols:
-                gene_indices.append(X.columns.get_loc(matching_col:=matching_cols[0]))
-    # Return unique indices, limited to 20
-    return sorted(list(set(gene_indices)))[:20]
+def load_demo_samples() -> pd.DataFrame:
+    if not DEMO_PATH.is_file():
+        raise FileNotFoundError(f"Demo samples not found: {DEMO_PATH.name}")
+    return pd.read_csv(DEMO_PATH)
 
-top_20_indices = get_top_20_gene_indices()
 
-# Ensure we always have at least some genes
-if len(top_20_indices) == 0:
-    top_20_indices = list(range(min(20, len(X.columns))))
+@st.cache_data
+def load_model_metrics() -> dict:
+    if not METRICS_PATH.is_file():
+        raise FileNotFoundError(f"Model evaluation report not found: {METRICS_PATH.name}")
+    return json.loads(METRICS_PATH.read_text(encoding="utf-8"))
 
-X_top20 = X.iloc[:, top_20_indices].copy()
-feature_names_top20 = X_top20.columns.tolist()
 
-# =====================
-# PILLAR 5: KILL SWITCH - Time-limited SHAP
-# =====================
-MAX_SHAP_TIME = 8  # seconds - ensures project doesn't hang
+@st.cache_data
+def load_feature_ranking() -> pd.DataFrame:
+    if not FEATURES_PATH.is_file():
+        raise FileNotFoundError(f"Feature ranking not found: {FEATURES_PATH.name}")
+    return pd.read_csv(FEATURES_PATH)
 
-# SHAP computation (no caching to avoid UnhashableParamError with DataFrames)
-# Relies on top-20 biomarker optimization for speed (computes in ~8s max)
-def compute_shap(sample_data, explainer_ref):
-    """Compute SHAP values using the full feature set expected by the explainer."""
-    return explainer_ref.shap_values(sample_data)
 
-# Sidebar controls
-st.sidebar.header("Configuration")
-compute_exact_shap = st.sidebar.checkbox(
-    "Compute exact SHAP values",
-    value=False,
-    help="Exact SHAP uses all 20,531 genes and may take more than a minute.",
+def class_description(code: str) -> str:
+    return f"{code} — {CANCER_NAMES.get(code, 'Cancer class')}"
+
+
+def prediction_table(model: object, samples: pd.DataFrame) -> pd.DataFrame:
+    probabilities = model.predict_proba(samples)
+    class_codes = model.classes_
+    predictions = model.predict(samples)
+    result = pd.DataFrame(
+        {
+            "Predicted class": [class_description(str(value)) for value in predictions],
+            "Model score": probabilities.max(axis=1),
+        }
+    )
+    for index, code in enumerate(class_codes):
+        result[f"P({code})"] = probabilities[:, index]
+    return result
+
+
+def local_shap_values(
+    model: object,
+    sample: pd.DataFrame,
+    predicted_class: str,
+) -> np.ndarray:
+    explainer = shap.TreeExplainer(model)
+    raw_values = explainer.shap_values(sample, check_additivity=False)
+    class_index = list(model.classes_).index(predicted_class)
+
+    if isinstance(raw_values, list):
+        return np.asarray(raw_values[class_index])[0]
+
+    values = np.asarray(raw_values)
+    if values.ndim == 3 and values.shape[-1] == len(model.classes_):
+        return values[0, :, class_index]
+    if values.ndim == 3 and values.shape[0] == len(model.classes_):
+        return values[class_index, 0, :]
+    if values.ndim == 2:
+        return values[0]
+    raise ValueError(f"Unexpected SHAP output shape: {values.shape}")
+
+
+bundle = load_model_bundle()
+model = bundle["model"]
+feature_names = bundle["feature_names"]
+demo = load_demo_samples()
+metrics = load_model_metrics()
+feature_ranking = load_feature_ranking()
+
+required_demo_columns = {"sample_id", "true_class", *feature_names}
+missing_demo_columns = required_demo_columns.difference(demo.columns)
+if missing_demo_columns:
+    raise ValueError(f"Demo data is missing columns: {', '.join(sorted(missing_demo_columns))}")
+if list(model.classes_) != bundle["classes"]:
+    raise ValueError("Saved model classes do not match the deployment metadata.")
+
+st.title("Cancer type classification")
+st.caption(
+    "An interactive research demo using gene-expression profiles from a public "
+    "TCGA Pan-Cancer dataset."
 )
-# Selectbox has 801 options (one per patient), but each sample uses only top 20 genes
-sample_idx = st.sidebar.selectbox(
-    "Select sample index (0-800)",
-    range(len(X)),
-    help=f"Select patient sample. SHAP computation uses top {len(top_20_indices)} TCGA biomarkers "
-          f"for fast analysis (full dataset: {len(X.columns)} genes)."
+st.badge("Research prototype", icon=":material/science:", color="orange")
+st.warning(
+    "For research and education only. This model is not clinically validated and "
+    "must not be used to diagnose, screen, or guide treatment.",
+    icon=":material/health_and_safety:",
 )
-# Get sample from top-20-limited dataset for fast SHAP computation
-sample = X_top20.iloc[[sample_idx]]
 
-# Main layout
-col1, col2 = st.columns([1, 2])
+test_metrics = metrics["held_out_test"]
+with st.container(horizontal=True):
+    st.metric("Source samples", f"{metrics['source_sample_count']:,}", border=True)
+    st.metric("Source gene features", metrics["source_feature_count"], border=True)
+    st.metric("Selected model features", len(feature_names), border=True)
+    st.metric("Cancer classes", len(bundle["classes"]), border=True)
+    st.metric("Held-out accuracy", f"{test_metrics['accuracy']:.1%}", border=True)
+    st.metric("Held-out macro F1", f"{test_metrics['macro_f1']:.1%}", border=True)
 
-with col1:
-    st.write("### Sample Data (Top 20 TCGA Biomarkers)")
-    st.dataframe(sample.T.head(10), width='stretch')
-    
-    # Predict - use full sample for model compatibility, but display top-20 insights
-    # The model was trained on all genes, so we need full features for prediction
-    sample_full = X.iloc[[sample_idx]]  # Full 20,531 genes for model predict
-    prediction = model.predict(sample_full)[0]
-    
-    # For SHAP and biomarker display, use top-20 limited sample
-    sample = X_top20.iloc[[sample_idx]]  # Top 20 genes only for SHAP/computation
-    
-    st.metric(label="Predicted Cancer Type", value=prediction)
-    
-    # Clinical Interpretation with TCGA context
-    st.write("### Clinical Interpretation (TCGA Context)")
-    
-    # KILL SWITCH: Time-limited SHAP computation
-    shap_values = None
-    computation_status = ""
-    
-    if compute_exact_shap:
-        try:
-            # The saved explainer expects all 20,531 model features. Compute on
-            # the full sample, then retain only the selected top-20 genes.
-            raw_shap_values = compute_shap(sample_full, explainer)
-            if isinstance(raw_shap_values, list):
-                raw_shap_values = np.stack(raw_shap_values, axis=-1)
-            if raw_shap_values.ndim == 3:
-                shap_values = raw_shap_values[:, top_20_indices, :]
-            else:
-                shap_values = raw_shap_values[:, top_20_indices]
-            computation_status = "✅ Exact SHAP computation completed"
-        except Exception as e:
-            computation_status = f"⚠ SHAP fallback engaged ({type(e).__name__})"
-            shap_values = None
-    else:
-        computation_status = "Model feature importance used for fast analysis"
-    
-    # Fallback: if SHAP failed or not available, use model feature importances
-    if shap_values is None:
-        top_importances = model.feature_importances_[top_20_indices]
-        shap_values = np.repeat(
-            top_importances[None, :, None], len(model.classes_), axis=2
-        )
-    
-    # Handle multi-class SHAP output shape: (1, n_features, n_classes)
-    if shap_values.ndim == 3:
-        class_idx = np.where(model.classes_ == prediction)[0][0]
-        values = shap_values[:, :, class_idx]
-    else:
-        # Binary fallback: (1, n_features)
-        values = shap_values if shap_values.ndim == 2 else np.zeros(len(feature_names_top20))
-    
-    # Get the feature with the highest absolute SHAP value
-    if values is not None and len(values) > 0 and len(values[0]) > 0:
-        top_feature_idx = np.argmax(np.abs(values[0]))
-        top_gene = feature_names_top20[top_feature_idx] if top_feature_idx < len(feature_names_top20) else f"gene_{top_feature_idx}"
-        
-        st.info(f"""
-        **For sample index {sample_idx}, the model predicts {prediction}.**  
-        **Primary TCGA biomarker driver: {top_gene}**  
-        SHAP computation status: {computation_status}  
-        Researchers should prioritize this biomarker for potential drug target validation 
-        or further molecular characterization to confirm its role in this cancer subtype 
-        (TCGA-approved analysis pipeline).""")
-    else:
-        st.info(f"For sample index {sample_idx}, the model predicts {prediction}. "
-                "Top biomarker identification in progress via TCGA pipeline.")
+with st.expander("Cancer class abbreviations"):
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {"Code": code, "Cancer type": CANCER_NAMES.get(code, "Cancer class")}
+                for code in bundle["classes"]
+            ]
+        ),
+        width="stretch",
+        hide_index=True,
+    )
 
-with col2:
-    st.write("### SHAP Biomarker Importance (TCGA-Optimized Top 20)")
-    
-    if shap_values is not None:
-        # Generate per-sample SHAP bar plot that updates when sample index changes
-        # shap.bar_plot shows individual predictions with feature direction
-        try:
-            # Create SHAP explanation object for bar plot
-            # Handle both binary (array) and multi-class (3D) outputs
-            n_classes = len(model.classes_)
-            class_idx = 0  # default for binary/unknown
-            
-            if shap_values.ndim == 3:
-                # Multi-class: use the predicted class's SHAP values
-                class_idx = np.where(model.classes_ == prediction)[0][0]
-                explanation_values = shap_values[0, :, class_idx]
-                explanation_base = 0
-                class_info = f" ( {model.classes_[class_idx].upper()} class)"
-            else:
-                # Binary: use the SHAP values directly
-                explanation_values = shap_values[0]
-                explanation_base = 0
-                class_info = " (binary classification)"
-            
-            # Create SHAP explanation for bar plot
-            shap_exp = shap.Explanation(
-                values=explanation_values,
-                base_values=explanation_base,
-                feature_names=feature_names_top20[:len(explanation_values)]
+st.caption(
+    f"Model: {bundle['selected_model']} using {len(feature_names)} selected features. "
+    f"Metrics come from a stratified test split of {metrics['split']['test_samples']} samples; "
+    "they are not external or clinical validation."
+)
+
+view = st.segmented_control(
+    "Choose a view",
+    options=["Explore held-out samples", "Upload expression data", "Model evaluation"],
+    default="Explore held-out samples",
+    key="main_view",
+)
+
+if view == "Explore held-out samples":
+    sample_ids = demo["sample_id"].astype(str).tolist()
+    selected_id = st.selectbox("Select a held-out sample", sample_ids)
+    selected_row = demo.loc[demo["sample_id"].astype(str) == selected_id].iloc[0]
+    sample = demo.loc[[selected_row.name], feature_names]
+    result = prediction_table(model, sample)
+    predicted_code = str(model.predict(sample)[0])
+    true_code = str(selected_row["true_class"])
+    score = float(result.loc[0, "Model score"])
+
+    st.caption(
+        f"Sample ID: `{selected_id}` · Observed class: **{class_description(true_code)}**"
+    )
+    columns = st.columns(3)
+    columns[0].metric("Model prediction", predicted_code, border=True)
+    columns[1].metric("Model score", f"{score:.1%}", border=True)
+    columns[2].metric(
+        "Holdout result",
+        "Correct" if predicted_code == true_code else "Incorrect",
+        border=True,
+    )
+    st.caption(
+        "The model score is the model's class probability, not a measure of clinical certainty."
+    )
+
+    probability_frame = pd.DataFrame(
+        {
+            "Cancer class": [str(code) for code in model.classes_],
+            "Probability": model.predict_proba(sample)[0],
+        }
+    ).sort_values("Probability", ascending=False)
+
+    probability_column, feature_column = st.columns([1, 1])
+    with probability_column:
+        with st.container(border=True):
+            st.subheader("Class probabilities")
+            st.bar_chart(
+                probability_frame,
+                x="Cancer class",
+                y="Probability",
+                horizontal=True,
             )
-            
-            # Generate per-sample bar plot (updates with sample index change)
-            fig, ax = plt.subplots(figsize=(10, 6))
-            shap.plots.bar(shap_exp, ax=ax, max_display=15, show=False)
-            st.pyplot(fig)
-            
-            # Multi-class color information
-            if n_classes > 1:
-                class_names = [str(c) for c in model.classes_]
-                st.caption(f"Prediction: {prediction}{class_info} using {class_names[class_idx]} class SHAP values")
+            st.caption(
+                "Model probabilities across the five classes. See the class-abbreviation "
+                "guide above for full names."
+            )
+
+    with feature_column:
+        with st.container(border=True):
+            st.subheader("Selected gene features")
+            st.dataframe(
+                sample.T.rename(columns={sample.index[0]: "Expression"}),
+                width="stretch",
+            )
+            st.caption(
+                "Feature IDs are dataset column names, not annotated gene symbols."
+            )
+
+    with st.container(border=True):
+        st.subheader("Model-level feature ranking")
+        ranking = feature_ranking.sort_values(
+            "selection_importance", ascending=False
+        ).head(15)
+        chart = ranking.rename(
+            columns={
+                "feature": "Gene feature",
+                "selection_importance": "Selection importance",
+            }
+        )
+        st.bar_chart(
+            chart,
+            x="Gene feature",
+            y="Selection importance",
+            horizontal=True,
+        )
+        st.caption(
+            "These global scores were used to select features from the training split. "
+            "They are not sample-specific SHAP explanations and do not imply causation."
+        )
+
+    if st.button("Explain this prediction with SHAP", icon=":material/insights:"):
+        try:
+            local_values = local_shap_values(model, sample, predicted_code)
+            local_frame = pd.DataFrame(
+                {"Gene feature": feature_names, "SHAP value": local_values}
+            )
+            local_frame = local_frame.iloc[
+                np.argsort(np.abs(local_values))[::-1][:15]
+            ]
+            st.subheader(f"Sample-level SHAP explanation for {predicted_code}")
+            st.bar_chart(
+                local_frame,
+                x="Gene feature",
+                y="SHAP value",
+                horizontal=True,
+            )
+            st.caption(
+                "Positive and negative values show how features move the model output "
+                "for the predicted class. They describe model behavior, not biological "
+                "causality or clinical importance."
+            )
+        except Exception as error:
+            st.error(
+                f"SHAP could not explain this prediction: "
+                f"{type(error).__name__}: {error}"
+            )
+
+elif view == "Upload expression data":
+    st.subheader("Predict from a CSV")
+    st.write(
+        "Upload one or more samples with the 20 required `gene_<number>` columns. "
+        "Additional metadata columns are ignored."
+    )
+    st.caption(
+        "Input values must use the same expression scale and preprocessing as the "
+        "TCGA training data. The app cannot verify that for you."
+    )
+    uploaded_file = st.file_uploader(
+        "Expression data CSV",
+        type=["csv"],
+        max_upload_size=10,
+    )
+
+    if uploaded_file is not None:
+        try:
+            uploaded = pd.read_csv(uploaded_file)
+        except (
+            UnicodeDecodeError,
+            pd.errors.EmptyDataError,
+            pd.errors.ParserError,
+            OSError,
+        ) as error:
+            st.error(f"Could not read the CSV: {error}")
+        else:
+            missing_features = [name for name in feature_names if name not in uploaded]
+            if missing_features:
+                st.error(
+                    "The CSV is missing required model features: "
+                    + ", ".join(missing_features)
+                )
+            elif uploaded.empty:
+                st.error("The uploaded CSV contains no sample rows.")
+            elif len(uploaded) > 200:
+                st.error("Upload at most 200 samples at a time.")
             else:
-                st.caption(f"Prediction: {prediction}{class_info}")
-                
-        except Exception as e:
-            # Fallback if shap bar plot fails
-            st.warning(f"Using fallback: {str(e)[:60]}")
-            importances = model.feature_importances_[top_20_indices]
-            indices = np.argsort(importances)[-15:][::-1]
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.barh(range(len(indices)), importances[indices], color='#1f77b4')
-            ax.set_yticks(range(len(indices)))
-            ax.set_yticklabels([feature_names_top20[i] for i in indices])
-            ax.set_xlabel("Feature Importance")
-            st.pyplot(fig)
-        
-        # Clinical takeaway
-        st.write("### 🔬 Clinical Takeaway")
-        st.info(f"The bar chart above shows the top 15 biomarkers driving the prediction for this specific sample. "
-                "Longer bars = stronger influence on the prediction. Colors indicate direction of impact "
-                "(positive/negative contribution to the cancer class probability). "
-                "Bar size updates automatically when you select a different sample index.")
-    
-    else:
-        # Fallback visualization - model feature importances
-        st.write("### Fallback: Model Feature Importances (Top 15)")
-        importances = model.feature_importances_[top_20_indices]
-        fig2, ax2 = plt.subplots(figsize=(10, 6))
-        indices = np.argsort(importances)[-15:][::-1]
-        short_names = [feature_names_top20[i] for i in indices]
-        ax2.barh(range(len(indices)), importances[indices], color='#004a99')
-        ax2.set_yticks(range(len(indices)))
-        ax2.set_yticklabels(short_names, fontsize=9)
-        ax2.set_xlabel('Feature Importance')
-        ax2.set_title('Fallback: Model Feature Importances (Top 15)', fontsize=13, fontweight='bold')
-        st.pyplot(fig2)
+                input_features = uploaded.loc[:, feature_names].apply(
+                    pd.to_numeric, errors="coerce"
+                )
+                if input_features.isna().any().any() or not np.isfinite(
+                    input_features.to_numpy()
+                ).all():
+                    st.error("Required gene features must contain finite numeric values.")
+                else:
+                    predictions = prediction_table(model, input_features)
+                    if "sample_id" in uploaded.columns:
+                        predictions.insert(0, "Sample ID", uploaded["sample_id"].astype(str))
+                    else:
+                        predictions.insert(
+                            0,
+                            "Sample ID",
+                            [f"upload_{index + 1}" for index in range(len(uploaded))],
+                        )
+                    st.dataframe(predictions, width="stretch", hide_index=True)
+                    st.download_button(
+                        "Download predictions",
+                        predictions.to_csv(index=False).encode("utf-8"),
+                        file_name="cancer_predictions.csv",
+                        mime="text/csv",
+                        icon=":material/download:",
+                    )
+
+elif view == "Model evaluation":
+    st.subheader("How the model was evaluated")
+    st.write(
+        "Samples were split by class into training, validation, and held-out test sets. "
+        "Feature ranking used only the training subset; model selection used validation "
+        "macro F1; the test set was reserved for the final report."
+    )
+
+    comparison = pd.DataFrame(metrics["model_comparison"]["validation_scores"]).T
+    comparison.index.name = "Candidate model"
+    st.markdown("**Validation comparison**")
+    st.dataframe(comparison, width="stretch")
+    st.caption(
+        f"Selected using {metrics['model_comparison']['selection_metric']}: "
+        f"{metrics['model_comparison']['selected_model']}."
+    )
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**Held-out classification report**")
+        report = pd.DataFrame(test_metrics["classification_report"]).T
+        st.dataframe(report, width="stretch")
+
+    with right:
+        st.markdown("**Held-out confusion matrix**")
+        confusion = pd.DataFrame(
+            test_metrics["confusion_matrix"],
+            index=metrics["held_out_test"]["class_order"],
+            columns=metrics["held_out_test"]["class_order"],
+        )
+        st.dataframe(confusion, width="stretch")
+        st.caption("Rows are observed classes; columns are predicted classes.")
+
+    st.warning(metrics["caveat"], icon=":material/info:")
+
+st.caption(
+    "Cancer class abbreviations follow the labels in the supplied dataset. "
+    "Gene feature IDs require a separate verified annotation table to map them to symbols."
+)
