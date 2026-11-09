@@ -61,6 +61,8 @@ The builder checks that expression and label files have matching, unique sample 
 
 The GitHub repository is public, so an app deployed from it will also be publicly accessible.
 
+**Live app:** [cancer-biomarker-ai-pipeline.streamlit.app](https://cancer-biomarker-ai-pipeline.streamlit.app/)
+
 1. Push the app code, pinned `requirements.txt`, and all four deployment assets to GitHub.
 2. Sign in at [Streamlit Community Cloud](https://share.streamlit.io/) with GitHub.
 3. Choose **Create app**, then select `marowa-labs/cancer-biomarker-ai-pipeline`, branch `main`, and entrypoint `app.py`.

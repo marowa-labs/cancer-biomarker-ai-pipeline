@@ -67,7 +67,7 @@ The ranked genes can help researchers prioritize candidates for follow-up, such 
 
 ### Was the app deployed?
 
-The app is configured for Streamlit Community Cloud, but it is not publicly deployed until the deployment assets and code are pushed to GitHub and an app is created at Streamlit Community Cloud. A live app from this public repository will be publicly accessible.
+Yes. The research demo is publicly hosted on Streamlit Community Cloud at [cancer-biomarker-ai-pipeline.streamlit.app](https://cancer-biomarker-ai-pipeline.streamlit.app/). It is an interactive research prototype, not a clinical diagnostic service.
 
 ### Which tools and modules did you use?
 
@@ -93,11 +93,10 @@ Acknowledging these limitations demonstrates sound scientific reasoning. Avoid d
 
 ## What to improve before the next presentation
 
-1. Deploy the app and check Community Cloud build logs.
-2. Verify upload validation with correctly formatted, malformed, missing-feature, and non-numeric CSV files.
-3. Add a verified annotation mapping so feature IDs can be translated to gene symbols.
-4. Validate on an independent cohort and assess potential batch effects.
-5. Compare more models with repeated or nested validation.
+1. Verify upload validation with correctly formatted, malformed, missing-feature, and non-numeric CSV files.
+2. Add a verified annotation mapping so feature IDs can be translated to gene symbols.
+3. Validate on an independent cohort and assess potential batch effects.
+4. Compare more models with repeated or nested validation.
 
 ## A confident closing answer
 
